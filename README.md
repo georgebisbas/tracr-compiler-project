@@ -12,6 +12,9 @@ that placement as a policy-gated codegen pass — covering **compute, data copy-
 communication**, with the ability to **select which IR regions** (loops, scopes, dispatches, copies,
 collectives) to trace, single- and multi-node.
 
+The pass is being built on the [`tracr-codegen-pass`](https://github.com/noabauma/pypto/tree/tracr-codegen-pass)
+branch of the PyPTO fork at [`github.com/noabauma/pypto`](https://github.com/noabauma/pypto).
+
 ## Context docs
 
 Start with **[docs/README.md](docs/README.md)** — an ordered set of context docs that goes from how we

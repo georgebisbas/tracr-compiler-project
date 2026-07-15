@@ -35,7 +35,7 @@ So the work splits cleanly by repo. A TracR branch was the initial instinct, but
 
 | Repo | Location | Branch | Role in this project |
 | --- | --- | --- | --- |
-| **pypto** | `~/src/pypto` (vendors simpler as `runtime/` submodule) | **`tracr-codegen-pass`** (off `main`) | **The pass.** All new work: `ProfilingLevel` on `RunConfig` → `emitProfilePush/Pop` at `EmitIndentedLine()` → registry + region selector. |
+| **pypto** | `~/src/pypto` (vendors simpler as `runtime/` submodule); fork [`github.com/noabauma/pypto`](https://github.com/noabauma/pypto/tree/tracr-codegen-pass) | **`tracr-codegen-pass`** (off `main`) | **The pass.** All new work: `ProfilingLevel` on `RunConfig` → `emitProfilePush/Pop` at `EmitIndentedLine()` → registry + region selector. |
 | **simpler** | `~/src/simpler` | `tracr` (tracks `upstream/tracr`) | **Runtime plumbing** the pass emits into + the hand-written reference (PR #1173). Extend later to copy/comm markers + flows + barrier sync. |
 | **tracr** | `~/src/tracr` | `main` | **Narrow postprocessing deltas** (later): multi-node clock correlation, `extraId`→bytes/bandwidth, buffer policy at scale. |
 | **pypto-lib** | `~/src/pypto-lib` | — | Model definitions (e.g. `models/qwen3/14b/...`) used to exercise/verify the pass. |

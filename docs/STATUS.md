@@ -11,7 +11,7 @@
 
 | Repo | Branch | Commit | Notes |
 | --- | --- | --- | --- |
-| **pypto** | `tracr-codegen-pass` | `7fb0e4cb` (off `main` `5fd56e7f`) | Working branch for the pass. Commit pins the `runtime/` submodule to `c39b1f03`. |
+| **pypto** | `tracr-codegen-pass` | `7fb0e4cb` (off `main` `5fd56e7f`) | Working branch for the pass; pushed to fork [`github.com/noabauma/pypto`](https://github.com/noabauma/pypto/tree/tracr-codegen-pass). Commit pins the `runtime/` submodule to `c39b1f03`. |
 | ↳ pypto `runtime/` submodule | `tracr` | `c39b1f03` | = simpler tracr HEAD. (`main` had recorded `438d5cb1`.) |
 | **simpler** | `tracr` | `c39b1f03` | Tracks `upstream/tracr`. Reference impl + runtime plumbing. Latest: "adding one tracr marker back (DLL_loading)". |
 | **tracr** | `main` | `916b0fd` | Unchanged; postprocessing deltas deferred to M2/M3. |
