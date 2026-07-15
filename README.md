@@ -24,3 +24,10 @@ principles and a concrete blueprint for the pass:
 - [03 — Compiler-level instrumentation principles (Devito exemplar)](docs/03-ir-instrumentation-principles.md)
 - [04 — A code-generator instrumentation blueprint](docs/04-codegen-instrumentation-blueprint.md)
 - [05 — Benchmarking compute, communication, and data movement](docs/05-benchmarking-compute-comm-copy.md)
+
+## Working docs
+
+The actionable layer on top of the context set — how we tackle the big plan:
+
+- [06 — Execution plan](docs/06-execution-plan.md) — plan of record: the reframe, repo/branch map, milestones (M0–M3), and the concrete first target (auto-emit the PR #1173 orchestration markers via a PyPTO codegen pass).
+- [STATUS](docs/STATUS.md) — current branch/commit state, next action, and the build & run recipe.
