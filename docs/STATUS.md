@@ -11,9 +11,9 @@
 
 | Repo | Branch | Commit | Notes |
 | --- | --- | --- | --- |
-| **pypto** | `tracr-codegen-pass` | `7fb0e4cb` (off `main` `5fd56e7f`) | Working branch for the pass; pushed to fork [`github.com/noabauma/pypto`](https://github.com/noabauma/pypto/tree/tracr-codegen-pass). Commit pins the `runtime/` submodule to `c39b1f03`. |
-| ↳ pypto `runtime/` submodule | `tracr` | `c39b1f03` | = simpler tracr HEAD. (`main` had recorded `438d5cb1`.) |
-| **simpler** | `tracr` | `c39b1f03` | Tracks `upstream/tracr`. Reference impl + runtime plumbing. Latest: "adding one tracr marker back (DLL_loading)". |
+| **pypto** | `tracr-codegen-pass` | `7fb0e4cb` + uncommitted M1 | Working branch for the pass; pushed to fork [`github.com/noabauma/pypto`](https://github.com/noabauma/pypto/tree/tracr-codegen-pass). **M1 codegen change lives here, uncommitted.** `runtime/` submodule bumped to `9cb023c3`. |
+| ↳ pypto `runtime/` submodule | `tracr` | `9cb023c3` | = simpler tracr HEAD. |
+| **simpler** | `tracr` | `9cb023c3` | Tracks `upstream/tracr`. Reference impl + runtime plumbing. Latest: "style: clang-format TraCR changes". |
 | **tracr** | `main` | `916b0fd` | Unchanged; postprocessing deltas deferred to M2/M3. |
 | **tracr-compiler-project** | `main` | rebased onto `68ca7b9` | This repo. `06`/`STATUS` replayed on top of the context-doc set. |
 
@@ -27,15 +27,24 @@ key) — arrange a key or push from the system that has one.
 ## Done
 
 - **M0** — TracR-in-simpler baseline runs end-to-end (hand-written markers).
-- Created `pypto:tracr-codegen-pass` off `main`; pinned `runtime/` submodule to simpler tracr `c39b1f03`.
+- Created `pypto:tracr-codegen-pass` off `main`; pinned `runtime/` submodule to simpler tracr.
+- **M1 — DONE & verified.** The pass auto-emits `INSTRUMENTATION_MARK_SET(g_TraCR_thread_idx,
+  PTO2_SCOPE_, <idx>)` (SET-only) before every generated `PTO2_SCOPE` in
+  `src/codegen/orchestration/orchestration_codegen.cpp`, plus the TracR `#include`s — **unconditional**,
+  gated by the existing `BUILD_TRACR` / `ENABLE_TRACR` build mechanism (Option A). 3 golden blocks in
+  `tests/ut/codegen/test_orchestration_codegen.py` updated. **Verified** via the qwen3-14b decode
+  oneliner (inside the `pypto3-hw-native-sys:cann9` container): `PTO2_SCOPE_` spans now appear in the
+  generated-orchestration lane. Change is uncommitted in `~/src/pypto`.
 
 ## In progress / next action
 
-- **M1** — implement the pass to auto-emit the Coarse orchestration markers (see
-  [06-execution-plan.md](06-execution-plan.md) §5). Three edits: `ProfilingLevel` on `RunConfig`;
-  `emitProfilePush/Pop` at `EmitIndentedLine()`; wire around the `RuntimeScopeStmt` emission + entry phases.
-- **Immediate step:** read-only map of `orchestration_codegen.cpp` to pin the exact scope-loop emission
-  site and the entry point for phase markers, and trace how a `RunConfig` flag reaches codegen.
+- **Commit M1** on `tracr-codegen-pass` (codegen change + golden updates). No AI co-author line (pypto rule).
+- **Cleanup:** the hand-written manual markers in
+  `examples/a2a3/.../paged_attention/kernels/orchestration/paged_attention_orch.cpp` are now redundant
+  for pass-covered (generated) paths and are being removed (simpler working tree). **Keep** the runtime
+  plumbing markers (`aicpu_executor.cpp`, `scheduler_*.cpp`) — the pass depends on them.
+- **Next milestone — M2:** copy + comm cost classes + flows + barrier-anchored multi-node sync (the L3
+  deliverable). Optional M1 polish first: per-iteration `extraId` (runtime loop index vs static scope id).
 
 ---
 
