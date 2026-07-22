@@ -3,7 +3,7 @@
 > Fast-moving snapshot of the working state. The durable plan is
 > [06-execution-plan.md](06-execution-plan.md). Update this file freely.
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-22
 
 ---
 
@@ -11,7 +11,7 @@
 
 | Repo | Branch | Commit | Notes |
 | --- | --- | --- | --- |
-| **pypto** | `tracr-codegen-pass` | `7fb0e4cb` + uncommitted M1 | Working branch for the pass; pushed to fork [`github.com/noabauma/pypto`](https://github.com/noabauma/pypto/tree/tracr-codegen-pass). **M1 codegen change lives here, uncommitted.** `runtime/` submodule bumped to `9cb023c3`. |
+| **pypto** | `tracr-codegen-pass` | `616a86b7` ("M1 done") | Working branch for the pass — **committed & pushed** to the fork: [github.com/noabauma/pypto/tree/tracr-codegen-pass](https://github.com/noabauma/pypto/tree/tracr-codegen-pass). Push must use **SSH** (the `gh`/HTTPS token lacks `workflow` scope and the branch history touches `.github/workflows/`). `runtime/` submodule at `9cb023c3`. |
 | ↳ pypto `runtime/` submodule | `tracr` | `9cb023c3` | = simpler tracr HEAD. |
 | **simpler** | `tracr` | `9cb023c3` | Tracks `upstream/tracr`. Reference impl + runtime plumbing. Latest: "style: clang-format TraCR changes". |
 | **tracr** | `main` | `916b0fd` | Unchanged; postprocessing deltas deferred to M2/M3. |
@@ -34,11 +34,11 @@ key) — arrange a key or push from the system that has one.
   gated by the existing `BUILD_TRACR` / `ENABLE_TRACR` build mechanism (Option A). 3 golden blocks in
   `tests/ut/codegen/test_orchestration_codegen.py` updated. **Verified** via the qwen3-14b decode
   oneliner (inside the `pypto3-hw-native-sys:cann9` container): `PTO2_SCOPE_` spans now appear in the
-  generated-orchestration lane. Change is uncommitted in `~/src/pypto`.
+  generated-orchestration lane. **Committed as `616a86b7` ("M1 done") and pushed** to the fork branch
+  [tracr-codegen-pass](https://github.com/noabauma/pypto/tree/tracr-codegen-pass).
 
 ## In progress / next action
 
-- **Commit M1** on `tracr-codegen-pass` (codegen change + golden updates). No AI co-author line (pypto rule).
 - **Cleanup:** the hand-written manual markers in
   `examples/a2a3/.../paged_attention/kernels/orchestration/paged_attention_orch.cpp` are now redundant
   for pass-covered (generated) paths and are being removed (simpler working tree). **Keep** the runtime
