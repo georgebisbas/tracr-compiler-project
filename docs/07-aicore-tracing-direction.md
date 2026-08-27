@@ -64,7 +64,7 @@ prerequisite for both.
 | # | Phase | Scope | Exit criterion |
 | --- | --- | --- | --- |
 | **D1** ✅ | **Vertical slice — one AICore marker to a rendered lane** — **DONE 2026-08-26** | Reuse the M2b timing `ChipTensor` as a fixed-capacity Payload buffer. AICore writes `Payload`s instead of raw int64; host serializes them to `thread.<n>/traces.bts`. **No swimlane pool, no rotation.** | `allreduce -p a2a3sim -d 0-1` produces an AICore lane inside each device proc in `perfetto.json`, spans in correct time order |
-| **D2** | **Real transport — fifth swimlane pool kind** | Payload pool alongside the existing four (AICore task, AICPU task, sched phase, orch phase); reuse `TypedBuffer`, free queue, rotation. Add a dropped-record counter surfaced to the host. | Markers survive a run that overflows one buffer; drop count reported; no measurable change to a non-traced run |
+| **D2** | **Real transport — fifth swimlane pool kind** | Payload pool alongside the existing four (AICore task, AICPU task, sched phase, orch phase); reuse `TypedBuffer`, free queue, rotation. Add a dropped-record counter surfaced to the host. **Decide the AICore barrier discipline** — inherit the per-record `dcci`+`dsb` (~0.6–0.7 µs/marker) or prove a publication-time deferral safe against lazy rotation discovery. | Markers survive a run that overflows one buffer; drop count reported; no measurable change to a non-traced run |
 | **D3** | **Cross-device flow arrows** | Packed `flow_id` (§6), emitted at `TNOTIFY` on the sender and `TWAIT` return on the receiver. | Arrows between two device procs in `perfetto.json`, one per peer message, no unmatched-endpoint warnings |
 | **D4** | **Onboard clock alignment** | Wire `simpler_setup/tools/clock_correlation.py` into the TracR path. | Onboard multi-device trace with host, AICPU and AICore lanes on one timeline |
 
@@ -115,13 +115,21 @@ From simpler's own overhead investigation
 | `get_sys_cnt_aicore()` SPR read | ~100–200 ns |
 | Record write-back with `dcci` + `dsb` | ~0.4–0.5 µs |
 | Full per-task swimlane overhead | ~0.8 µs |
-| **One marker, barrier deferred to publication** (derived) | **~0.15–0.25 µs** |
+| **One marker, D2 as designed** (derived: clock read + per-record `dcci`+`dsb`) | **~0.6–0.7 µs** |
+| One marker *if* the AICore barrier can be deferred to publication | ~0.2 µs — **unproven**, see below |
 | Phase-2 barrier wait being measured | 443 µs (a2a3sim, 2 ranks) |
 
-Deferring the barrier to buffer publication is not a hopeful assumption — it already landed for the
-swimlane and was verified onboard on a2a3
-(`docs/investigations/2026-06-chip-swimlane-defer-wmb.md`). At ~0.2 µs a marker, a handful around a
-collective phase is under a tenth of a percent of the wait being measured.
+**The deferral is not already proven for the AICore side.** The `defer-wmb` investigation
+(`docs/investigations/2026-06-chip-swimlane-defer-wmb.md`) removed the per-task `wmb()` in
+`chip_swimlane_aicpu_complete_task` — the *AICPU* collector. `chip_swimlane_aicore_commit_task_record`
+still issues `dcci(record, SINGLE_CACHE_LINE, CACHELINE_OUT)` + `dsb` **per record**, and that asymmetry
+looks deliberate: the AICore does not control publication. The AICPU rotates buffers and the core only
+discovers it lazily, by re-reading `head->current_buf_seq` on its next reservation — so the AICPU can
+publish and drain a buffer while the core still holds un-flushed records. Deferring on the AICore side is
+therefore an open design question for D2, not an available pattern.
+
+Either way the cost case holds: at 0.6–0.7 µs a marker, a handful around a collective phase is ~0.2% of
+the 347 µs wait D1 measured. But D2 should be planned at 0.6–0.7 µs, not 0.2 µs.
 
 ## 6. Decided design points
 
