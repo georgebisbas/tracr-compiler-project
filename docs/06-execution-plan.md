@@ -74,7 +74,7 @@ Findings from inspecting the actual `~/src/pypto` checkout — these anchor the 
 | --- | --- | --- | --- |
 | **M0** | TracR-in-simpler baseline runs end-to-end (hand-written markers; PR #1173) | simpler `tracr` | **Done** — builds with `BUILD_TRACR=ON`, runs a model, `tracr_process` → Perfetto. |
 | **M1** | **Pass auto-emits the Coarse orchestration markers PR #1173 placed by hand** | pypto `tracr-codegen-pass` | **Current.** See §5. |
-| **M2** | L3 multi-device: **copy + comm** cost classes, **flows** for comm edges, **barrier-anchored** cross-rank sync | pypto + simpler + tracr | Planned (doc [05](05-benchmarking-compute-comm-copy.md)). |
+| **M2** | L3 multi-device: **copy + comm** cost classes, **flows** for comm edges, **barrier-anchored** cross-rank sync | pypto + simpler + tracr | **In progress.** Steps 1-3 + M2a copy lanes + group flow arrows done; M2b comm timing spiked. Comm *lanes* and device-to-device *arrows* are scoped as D1-D4 in doc [07](07-aicore-tracing-direction.md). |
 | **M3** | **Region selector** + full `ProfilingConfig` (level / categories / selector / backend / flows) + optional Tracy/NVTX backends | pypto | Planned (docs [04](04-codegen-instrumentation-blueprint.md) §1, [05](05-benchmarking-compute-comm-copy.md) §7). |
 
 Rationale for the ordering: M1 validates the *mechanism* against a known-good hand-written output (lowest
@@ -134,6 +134,9 @@ Kept narrow on purpose — these are the only genuine TracR-repo gaps:
 2. **`extraId` → bytes/bandwidth** in postprocessing, for copy/comm GB/s. The `extraIdLabels` hook is read
    by the postprocessor but never written by the library.
 3. **Buffer policy at scale** — one dump at finalize vs. periodic drains for long multi-rank runs.
+   **Decided** in doc [07](07-aicore-tracing-direction.md) §6: `IGNORE_IF_FULL`, never
+   `TRACR_POLICY_PERIODIC` — a wrapped ring is rotated rather than time-ordered, while `tracr_process`
+   requires each `.bts` pre-sorted and never sorts one itself.
 
 Note: comm **arrows** are *not* a TracR gap (flows already work) — using them is a simpler-side task.
 

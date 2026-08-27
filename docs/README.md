@@ -14,6 +14,8 @@ narrative from *how we profile today* to *how the pass should be built*.
 | 03 | [03-ir-instrumentation-principles.md](03-ir-instrumentation-principles.md) | **The compiler-level principles.** How code generators inject profiling as an IR pass — with Devito as the deep worked example — plus a taxonomy of how LLVM, MLIR, Halide, TVM, Kokkos, NVTX/Tracy/ittnotify do it, and where PyPTO/TracR sits. |
 | 04 | [04-codegen-instrumentation-blueprint.md](04-codegen-instrumentation-blueprint.md) | **The practical blueprint.** The concrete emission pattern (a `ProfilingLevel` policy + a pluggable TracR/Tracy/NVTX backend), mapped onto PyPTO's codegen, with generated-output examples and best practices — a minimal end-to-end design for the pass. |
 | 05 | [05-benchmarking-compute-comm-copy.md](05-benchmarking-compute-comm-copy.md) | **Benchmarking scope (HPC).** Instrument **all three cost classes** — compute, data copy-in/out, communication — in one correlated timeline, with a **region selector** to choose which IR parts (loops, scopes, dispatches, copies, collectives) to trace, and single- vs multi-node methodology (flows for comm edges, per-rank correlation, overlap, straggler analysis). |
+| 06 | [06-execution-plan.md](06-execution-plan.md) | **The build plan.** Repo/branch map, verified ground truth, the M0–M3 milestones, and the TracR-side deltas. |
+| 07 | [07-aicore-tracing-direction.md](07-aicore-tracing-direction.md) | **Reaching the AICore.** Why collectives are invisible from above the core, the reframe (feed TracR's payload format rather than port TracR to CCEC), the three verified preconditions, and the D1–D4 phases — plus the decided buffer policy and flow-id packing. |
 
 ## The throughline
 
