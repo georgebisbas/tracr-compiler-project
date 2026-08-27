@@ -65,7 +65,7 @@ prerequisite for both.
 | --- | --- | --- | --- |
 | **D1** ✅ | **Vertical slice — one AICore marker to a rendered lane** — **DONE 2026-08-26** | Reuse the M2b timing `ChipTensor` as a fixed-capacity Payload buffer. AICore writes `Payload`s instead of raw int64; host serializes them to `thread.<n>/traces.bts`. **No swimlane pool, no rotation.** | `allreduce -p a2a3sim -d 0-1` produces an AICore lane inside each device proc in `perfetto.json`, spans in correct time order |
 | **D2a** ✅ | **Shared emitter + drop counting** — **DONE 2026-08-27** | `tracr_aicore_emit.h` owns the device-side contract: Payload wire layout, count/dropped header, set/reset helpers. Self-initializing header, overflow drops and counts. | Emitter reusable outside the example; a buffer too small to hold the run truncates at a span boundary and reports the drop count |
-| **D2b** | **Runtime-allocated per-core buffers** | A `KernelArgs` slot table so the runtime, not the example, owns the buffer, and each core gets its own — a user kernel cannot learn its own core index today, `block_idx` reaches only `aicore_execute`. Mirrors `chip_swimlane_aicore_rotation_table` exactly. | Multi-block kernel writes per-core lanes with no shared-buffer race |
+| **D2b** ✅ | **Designated-writer guard** — **DONE 2026-08-27, verified onboard** | `kTracrDisabled` as a capacity sentinel makes every non-designated worker a no-op. Runtime-allocated per-core buffers are deferred until SPMD needs them: `block_dim>1` is not implemented, so no race exists today. | Both chips record their own lane; a wrong-writer predicate is caught rather than silently losing a lane |
 | **D3** | **Cross-device flow arrows** | Packed `flow_id` (§6), emitted at `TNOTIFY` on the sender and `TWAIT` return on the receiver. | Arrows between two device procs in `perfetto.json`, one per peer message, no unmatched-endpoint warnings |
 | **D4** | **Onboard clock alignment** | Wire `simpler_setup/tools/clock_correlation.py` into the TracR path. | Onboard multi-device trace with host, AICPU and AICore lanes on one timeline |
 
@@ -131,6 +131,35 @@ follow from it. A user kernel cannot learn its own core index — `block_idx` is
 lazy-resolves), the same one `chip_swimlane_aicore_rotation_table` uses. That is D2b: ~6 files including a
 wire-struct field and both platform kernel entries. Still far below the fifth-pool-kind option, but not
 free.
+
+### D2b result (2026-08-27) — first onboard run
+
+**Done, and verified on real silicon** (`-p a2a3 -d 0-1`, 910B2). Both chips render their AICore comm
+lane, all ranks match golden:
+
+```
+pid=1000  AIVector_0  Phase2   dur=      0.7us  extra_id=0
+pid=1000  AIVector_0  Barrier  dur=      0.4us  extra_id=1
+pid=1001  AIVector_0  Phase2   dur=      0.7us  extra_id=1
+pid=1001  AIVector_0  Barrier  dur=  13045.3us  extra_id=0
+```
+
+**The first physically meaningful comm numbers this project has produced.** Sim reported ~340 µs
+symmetric waits, which was host-scheduler noise; onboard shows a **13 ms inter-chip arrival skew** —
+rank 1 reached the barrier ~13 ms before rank 0 and blocked there, while rank 0 walked straight through in
+0.4 µs. That is the straggler signal doc [05](05-benchmarking-compute-comm-copy.md) exists to expose, and
+it is invisible from any tier above the core.
+
+**The onboard run immediately caught a bug the sim run could not.** The guard first tested the
+zero-argument hardware `get_block_idx()`. A single-block task lands on whichever physical core is free, so
+on rank 1 that index was non-zero and the guard **silently muted the entire lane** — rank 0 recorded, rank
+1 reported "no payloads". The fix is the *logical* SPMD index, `get_block_idx(args)` from
+`runtime/common/intrinsic.h` (which kernels may include; the a5 examples do), and that is 0 for a
+single-block task on every chip.
+
+The lesson generalises past this bug: **a wrong writer-predicate fails silently, by losing a lane.** That
+is a worse failure mode than the race it guards against, which cannot occur while `block_dim>1` is
+unimplemented. Any future change to the predicate must be validated on more than one chip.
 
 ## 5. Cost
 
@@ -222,3 +251,21 @@ D1–D4 sit under [06](06-execution-plan.md) §4 M2 (multi-device comm cost clas
 three TracR-side deltas in §6 of that doc: the clock-correlation gap (D4, and mostly already solved by
 `clock_correlation.py`) and the buffer-policy-at-scale question (D2, decided in §6 above). The
 `extraId → bytes/bandwidth` delta is untouched by this direction.
+
+## 9. Build environment (each of these cost a rebuild)
+
+- **Build and run in `simpler-cann9`**, via `attach_docker_simpler.sh` + `build_simpler.sh`. The configured
+  toolchain is `/usr/local/bin/g++-15`, which exists only in that image — `pypto3-hw-native-sys:cann9` has
+  gcc-15 at `/usr/bin/`, so CMake's `project()` fails there with "not a full path to an existing compiler".
+- **`BUILD_TRACR=ON` needs `pybind11`** (for `pybind11_add_module(tracr ...)` at `CMakeLists.txt:50`), and
+  it is absent from the system site-packages of *both* images. A warm `build/` cmake cache hides this; a
+  clean configure does not. `pip install pybind11` into the venv is the fix.
+- **Do not `rm -rf build/` to troubleshoot.** It discards the cache that was satisfying the dependency
+  above, turning a working tree into one that cannot configure at all.
+- **`a2a3sim` cannot compile kernels in `simpler-cann9`** — the sim path uses the host g++ and hits
+  `'_Float16' does not name a type` in `pto/common/type.hpp`. Onboard is unaffected (it compiles with
+  `ccec`), so **prefer `-p a2a3` for verification**: it is both more reliable here and the only source of
+  physically meaningful timing.
+- A stale/mixed `build/` presents as `_ensure_comm_base failed ... control_comm_init ... FileNotFoundError`
+  at multi-chip setup — which reads like an IPC or container problem and is not. A clean rebuild with the
+  flags above fixes it.
