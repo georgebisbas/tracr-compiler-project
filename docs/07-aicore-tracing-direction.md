@@ -63,7 +63,7 @@ prerequisite for both.
 
 | # | Phase | Scope | Exit criterion |
 | --- | --- | --- | --- |
-| **D1** | **Vertical slice — one AICore marker to a rendered lane** | Reuse the M2b timing `ChipTensor` as a fixed-capacity Payload buffer. AICore writes `Payload`s instead of raw int64; host serializes them to `thread.<n>/traces.bts`. **No swimlane pool, no rotation.** | `allreduce -p a2a3sim -d 0-1` produces an AICore lane inside each device proc in `perfetto.json`, spans in correct time order |
+| **D1** ✅ | **Vertical slice — one AICore marker to a rendered lane** — **DONE 2026-08-26** | Reuse the M2b timing `ChipTensor` as a fixed-capacity Payload buffer. AICore writes `Payload`s instead of raw int64; host serializes them to `thread.<n>/traces.bts`. **No swimlane pool, no rotation.** | `allreduce -p a2a3sim -d 0-1` produces an AICore lane inside each device proc in `perfetto.json`, spans in correct time order |
 | **D2** | **Real transport — fifth swimlane pool kind** | Payload pool alongside the existing four (AICore task, AICPU task, sched phase, orch phase); reuse `TypedBuffer`, free queue, rotation. Add a dropped-record counter surfaced to the host. | Markers survive a run that overflows one buffer; drop count reported; no measurable change to a non-traced run |
 | **D3** | **Cross-device flow arrows** | Packed `flow_id` (§6), emitted at `TNOTIFY` on the sender and `TWAIT` return on the receiver. | Arrows between two device procs in `perfetto.json`, one per peer message, no unmatched-endpoint warnings |
 | **D4** | **Onboard clock alignment** | Wire `simpler_setup/tools/clock_correlation.py` into the TracR path. | Onboard multi-device trace with host, AICPU and AICore lanes on one timeline |
@@ -72,6 +72,38 @@ prerequisite for both.
 infrastructure, and if the lane does not render, D2–D4 are all built on sand. It also reuses a mechanism
 already proven in M2b (an AICore-written `ChipTensor` read back by the host), so the only genuinely new
 thing under test is the payload format and the `.bts` sink.
+
+### D1 result (2026-08-26)
+
+**Done and rendering.** `allreduce -p a2a3sim -d 0-1` emits AICore spans onto the `AIVector_0` lane of
+both device procs, beside the AICPU-recorded `Running_Task_Single` on `AIVector_2`:
+
+```
+pid=1000  AIVector_0  Phase2   dur=5.9us    extra_id=0     (rank 0 issuing notifies)
+pid=1000  AIVector_0  Barrier  dur=347.9us  extra_id=1     (rank 0 waiting on peer 1)
+pid=1001  AIVector_0  Phase2   dur=0.3us    extra_id=1
+pid=1001  AIVector_0  Barrier  dur=341.2us  extra_id=0     (rank 1 waiting on peer 0)
+```
+
+Trace kept at `~/tmp/tracr_d1/perfetto.json`. Commits: `a83cf360` (emitter), plus the two corrections
+below. **The central claim holds: `tracr_process` needed no changes at all.**
+
+Two things the slice taught us, both of which change D2's design:
+
+1. **`channel_names` is sized by the run's actual core count.** A sim run with 8 AICube / 16 AIVector puts
+   `AIVector_0` at index 12; the 24/48 layout puts it at 28. No channel index is knowable at kernel
+   compile time — the kernel writes a placeholder and the host stamps the resolved index when packing,
+   exactly as `HostCopyTraces2BTS` already does. Only the *event* ids are compile-time constants, and they
+   are re-verified against the emitted metadata on every run.
+2. **The trace buffer needs an explicit record count.** It is an `OUTPUT_EXISTING` tensor, so the host's
+   zeros are never staged to the device and untouched words hold stale GM. Decoding until a zero timestamp
+   appeared silently picked up six records of unrelated memory with timestamps from a different clock
+   domain. Word 0 now carries the count. **The same latent flaw was in M2b**, whose `!= 0` per-peer check
+   could equally have read stale slots — it simply never happened to.
+
+Deliberately still open, for D2: the kernel writes from whichever AIV core runs it, with no block-index
+guard — the same assumption M2b made. A multi-block kernel would have several cores racing on one buffer,
+which is precisely what the per-core pool structure exists to fix.
 
 ## 5. Cost
 
