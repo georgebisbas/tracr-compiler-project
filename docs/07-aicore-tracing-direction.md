@@ -64,7 +64,8 @@ prerequisite for both.
 | # | Phase | Scope | Exit criterion |
 | --- | --- | --- | --- |
 | **D1** ✅ | **Vertical slice — one AICore marker to a rendered lane** — **DONE 2026-08-26** | Reuse the M2b timing `ChipTensor` as a fixed-capacity Payload buffer. AICore writes `Payload`s instead of raw int64; host serializes them to `thread.<n>/traces.bts`. **No swimlane pool, no rotation.** | `allreduce -p a2a3sim -d 0-1` produces an AICore lane inside each device proc in `perfetto.json`, spans in correct time order |
-| **D2** | **Real transport — fifth swimlane pool kind** | Payload pool alongside the existing four (AICore task, AICPU task, sched phase, orch phase); reuse `TypedBuffer`, free queue, rotation. Add a dropped-record counter surfaced to the host. **Decide the AICore barrier discipline** — inherit the per-record `dcci`+`dsb` (~0.6–0.7 µs/marker) or prove a publication-time deferral safe against lazy rotation discovery. | Markers survive a run that overflows one buffer; drop count reported; no measurable change to a non-traced run |
+| **D2a** ✅ | **Shared emitter + drop counting** — **DONE 2026-08-27** | `tracr_aicore_emit.h` owns the device-side contract: Payload wire layout, count/dropped header, set/reset helpers. Self-initializing header, overflow drops and counts. | Emitter reusable outside the example; a buffer too small to hold the run truncates at a span boundary and reports the drop count |
+| **D2b** | **Runtime-allocated per-core buffers** | A `KernelArgs` slot table so the runtime, not the example, owns the buffer, and each core gets its own — a user kernel cannot learn its own core index today, `block_idx` reaches only `aicore_execute`. Mirrors `chip_swimlane_aicore_rotation_table` exactly. | Multi-block kernel writes per-core lanes with no shared-buffer race |
 | **D3** | **Cross-device flow arrows** | Packed `flow_id` (§6), emitted at `TNOTIFY` on the sender and `TWAIT` return on the receiver. | Arrows between two device procs in `perfetto.json`, one per peer message, no unmatched-endpoint warnings |
 | **D4** | **Onboard clock alignment** | Wire `simpler_setup/tools/clock_correlation.py` into the TracR path. | Onboard multi-device trace with host, AICPU and AICore lanes on one timeline |
 
@@ -104,6 +105,32 @@ Two things the slice taught us, both of which change D2's design:
 Deliberately still open, for D2: the kernel writes from whichever AIV core runs it, with no block-index
 guard — the same assumption M2b made. A multi-block kernel would have several cores racing on one buffer,
 which is precisely what the per-core pool structure exists to fix.
+
+### D2a result (2026-08-27)
+
+**Done.** The emitter moved to `src/common/platform/include/aicore/tracr_aicore_emit.h` and the allreduce
+kernel now uses it rather than carrying its own copy. Two behaviours verified in sim:
+
+- **Normal run** — unchanged output: 4 payloads / 2 spans per rank, no drops, golden matched.
+- **Overflow probe** (buffer deliberately sized to 2 payloads) — 2 written, **2 dropped and reported**, and
+  the lane truncated *at a span boundary*: a complete SET/RESET pair, still monotonic, no orphaned RESET.
+  Kernel correctness unaffected. This is the `IGNORE_IF_FULL` behaviour §6 argues for over `PERIODIC`,
+  demonstrated rather than assumed.
+
+**No cache maintenance is needed in this design**, and that is a real benefit of the fixed-buffer choice
+over the pool: the buffer has a single reader, on the host, after the kernel completes, so ordering comes
+from the task-completion path that already precedes the copy back. The per-record `dcci`+`dsb` that costs
+the swimlane ~0.4–0.5 µs only becomes necessary when the AICPU drains buffers *while* a core keeps
+writing. A marker here is therefore ~0.15–0.2 µs, not 0.6–0.7 µs.
+
+**Scope correction.** When D2's options were weighed, the fixed-buffer path was costed at "~150 lines,
+touches no existing file". That was optimistic: it holds for the emitter, but *per-core* buffers do not
+follow from it. A user kernel cannot learn its own core index — `block_idx` is a parameter of
+`aicore_execute` and never reaches kernel code — so runtime-allocated per-core buffers need the
+`KernelArgs` slot-table chain (host allocates, AICPU populates, AICore kernel entry stashes, getter
+lazy-resolves), the same one `chip_swimlane_aicore_rotation_table` uses. That is D2b: ~6 files including a
+wire-struct field and both platform kernel entries. Still far below the fifth-pool-kind option, but not
+free.
 
 ## 5. Cost
 
