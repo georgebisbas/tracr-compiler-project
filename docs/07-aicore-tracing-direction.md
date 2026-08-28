@@ -66,7 +66,7 @@ prerequisite for both.
 | **D1** ✅ | **Vertical slice — one AICore marker to a rendered lane** — **DONE 2026-08-26** | Reuse the M2b timing `ChipTensor` as a fixed-capacity Payload buffer. AICore writes `Payload`s instead of raw int64; host serializes them to `thread.<n>/traces.bts`. **No swimlane pool, no rotation.** | `allreduce -p a2a3sim -d 0-1` produces an AICore lane inside each device proc in `perfetto.json`, spans in correct time order |
 | **D2a** ✅ | **Shared emitter + drop counting** — **DONE 2026-08-27** | `tracr_aicore_emit.h` owns the device-side contract: Payload wire layout, count/dropped header, set/reset helpers. Self-initializing header, overflow drops and counts. | Emitter reusable outside the example; a buffer too small to hold the run truncates at a span boundary and reports the drop count |
 | **D2b** ✅ | **Designated-writer guard** — **DONE 2026-08-27, verified onboard** | `kTracrDisabled` as a capacity sentinel makes every non-designated worker a no-op. Runtime-allocated per-core buffers are deferred until SPMD needs them: `block_dim>1` is not implemented, so no race exists today. | Both chips record their own lane; a wrong-writer predicate is caught rather than silently losing a lane |
-| **D3** | **Cross-device flow arrows** | Packed `flow_id` (§6), emitted at `TNOTIFY` on the sender and `TWAIT` return on the receiver. | Arrows between two device procs in `perfetto.json`, one per peer message, no unmatched-endpoint warnings |
+| **D3** ✅ | **Cross-device flow arrows** — **DONE 2026-08-27, verified onboard** | Arrow tail at each `TNOTIFY`, head at the matching `TWAIT` return; both endpoints derive the packed id independently. | 4 arrows between the two device procs, all matched, no id collision with the host→device group flows |
 | **D4** | **Onboard clock alignment** | Wire `simpler_setup/tools/clock_correlation.py` into the TracR path. | Onboard multi-device trace with host, AICPU and AICore lanes on one timeline |
 
 **D1 first, deliberately.** It is the cheapest possible test of the central claim, it touches no shared
@@ -160,6 +160,45 @@ single-block task on every chip.
 The lesson generalises past this bug: **a wrong writer-predicate fails silently, by losing a lane.** That
 is a worse failure mode than the race it guards against, which cannot occur while `block_dim>1` is
 unimplemented. Any future change to the predicate must be validated on more than one chip.
+
+### D3 result (2026-08-27) — the first cross-device arrows
+
+**Done, verified onboard** (910B2, 2 chips). Both directions of the barrier pair correctly, and the
+host→device group flows coexist with no collision:
+
+```
+tail id=0x00010000 (src=0 dst=1 seq=0)  pid=1000 AIVector_0   rank 0's notify ...
+head id=0x00010000 (src=0 dst=1 seq=0)  pid=1001 AIVector_0   ... releases rank 1's wait
+tail id=0x01000000 (src=1 dst=0 seq=0)  pid=1001 AIVector_0
+head id=0x01000000 (src=1 dst=0 seq=0)  pid=1000 AIVector_0
+tail id=0x00000001                      pid=<host> L3_Orchestrator   (group flow, unchanged)
+head id=0x00000001                      pid=1000  AICPU_2
+```
+
+The trace now answers *why* a rank stalled, not just how long: rank 1 blocked at the barrier for 27.5 ms
+(13.0 ms in the previous run — the skew itself varies run to run), and the arrow names exactly which
+notify from rank 0 ended it. Commit `fce8109b`.
+
+**What D3 does and does not draw.** It draws the *synchronization* edges — who released whom. It does not
+draw the data movement, and that is structural rather than a gap: Phase 3 is a **pull**
+(`TLOAD(recvTile, remoteG)` against `CommRemotePtr(commCtx, scratch, peer)`), so a rank reads its peer's
+HBM directly and the peer's AICore executes nothing. A one-sided read has one endpoint, so no flow id
+scheme can pair it. For "which peer's data did this rank pull, and when", the answer is a per-peer span
+around each `TLOAD`, not an arrow.
+
+Two further limits, neither hit by this collective:
+
+- **Aggregate counters.** This barrier uses per-peer signal slots (rank r writes peer's `signal[r]` and
+  waits on its own `signal[p]`), so identity is present at both ends. A collective that waits on one
+  counter incremented by every peer cannot attribute its release to any sender — no pair, no arrow.
+- **`seq` derivation.** A constant is correct here only because the barrier sends exactly one notify per
+  peer per invocation. A ring allreduce needs the step index, a segmented reduce-scatter the chunk index,
+  and both sides must derive it without communicating.
+
+**An onboard run failed first with `VEC instruction error: the ub address out of bounds` plus a driver
+`rtMemExportToShareableHandleV2 ... feature not support`, then passed unchanged on re-run** — the
+poisoned-device-state signature already recorded in STATUS. Re-run before investigating an onboard AICore
+fault.
 
 ## 5. Cost
 
