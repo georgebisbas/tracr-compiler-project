@@ -16,6 +16,7 @@ narrative from *how we profile today* to *how the pass should be built*.
 | 05 | [05-benchmarking-compute-comm-copy.md](05-benchmarking-compute-comm-copy.md) | **Benchmarking scope (HPC).** Instrument **all three cost classes** — compute, data copy-in/out, communication — in one correlated timeline, with a **region selector** to choose which IR parts (loops, scopes, dispatches, copies, collectives) to trace, and single- vs multi-node methodology (flows for comm edges, per-rank correlation, overlap, straggler analysis). |
 | 06 | [06-execution-plan.md](06-execution-plan.md) | **The build plan.** Repo/branch map, verified ground truth, the M0–M3 milestones, and the TracR-side deltas. |
 | 07 | [07-aicore-tracing-direction.md](07-aicore-tracing-direction.md) | **Reaching the AICore.** Why collectives are invisible from above the core, the reframe (feed TracR's payload format rather than port TracR to CCEC), the three verified preconditions, and the D1–D4 phases — plus the decided buffer policy and flow-id packing. |
+| 08 | [08-codegen-comm-markers-plan.md](08-codegen-comm-markers-plan.md) | **The plan for zero-user-markers comm tracing.** Why the runtime is the wrong layer (PyPTO lowers notify/wait straight to the ISA, bypassing simpler), the C1–C5 phases, the `InjectGMPipeBuffer` precedent for buffer injection, and the peer-from-offsets inference that is the one unproven step. |
 
 ## The throughline
 

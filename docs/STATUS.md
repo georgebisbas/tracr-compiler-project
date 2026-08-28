@@ -172,7 +172,14 @@ key) — arrange a key or push from the system that has one.
 Compute = M1 (done); L3 host **scheduling** = M2 steps 1–3 (done, sim); copy cost = M2a (implemented);
 comm cost = M2b (spike landed & validated in sim). Nothing is blocked. In priority order:
 
-1. **D1 — AICore TracR lane, vertical slice.** New direction, fully scoped in
+1. **C1 — codegen emits comm spans (no user markers).** Planned in
+   [08-codegen-comm-markers-plan.md](08-codegen-comm-markers-plan.md). D1–D3 proved the runtime substrate on
+   silicon (8-chip all-to-all, 56/56 arrows matched); the remaining gap is that a user still hand-places the
+   markers. pypto-lib models cannot be reached from simpler's comm layer — PyPTO lowers
+   `pld.system.notify`/`wait` straight to the PTO ISA — so the markers must come from codegen. C1 emits
+   spans only (no peer analysis), then C2 buffer injection, C3 arrow tails, C4 heads, C5 seq.
+
+2. **D1 — AICore TracR lane, vertical slice.** New direction, fully scoped in
    [07-aicore-tracing-direction.md](07-aicore-tracing-direction.md). Both production collectives issue
    `TWAIT` inline on the AICore, so the collective is invisible to every marker above the core — reaching
    that tier is the difference between profiling *around* communication and profiling it. **The reframe:
@@ -183,7 +190,7 @@ comm cost = M2b (spike landed & validated in sim). Nothing is blocked. In priori
    reusing the M2b timing `ChipTensor` as a fixed-capacity Payload buffer — no swimlane-pool integration.
    D2 (real transport), D3 (D2D arrows), D4 (onboard clock) follow.
 
-2. **M2c onboard clock sync — now clearly the top item.** Onboard multi-device runs, but the host lane is
+3. **M2c onboard clock sync — now clearly the top item.** Onboard multi-device runs, but the host lane is
    not aligned to the device clock, so the `L3_Orchestrator` lane and every flow arrow land in the wrong
    place the moment you leave sim. The 6-run onboard result above makes this the gating work: the thing
    worth seeing is a 3-10 ms inter-chip arrival skew, and seeing it requires the host and both device lanes
@@ -191,13 +198,13 @@ comm cost = M2b (spike landed & validated in sim). Nothing is blocked. In priori
    two-anchor device->host alignment with drift correction and an uncertainty bound, and every run already
    emits the `[CLOCK_ANCHOR]` lines it consumes. This may be wiring, not research. TracR's own `sync_end`
    interpolation is unimplemented, so this is a ready-made replacement.
-3. **Onboard multi-clock sync (M2c)** — now the *gating* item, because onboard multi-device works but the
+4. **Onboard multi-clock sync (M2c)** — now the *gating* item, because onboard multi-device works but the
    host lane is not aligned to it: host CPU counter ≠ device AICPU counter, so on a2a3 onboard the
    `L3_Orchestrator` lane and the step-3 flow arrows can land in the wrong place. Sim is aligned
    (`USE_HW_COUNTER` + host `start_time=0`). Needs a recorded host↔device offset or a barrier-anchored
    `sync_start`. Until it lands, **validate multi-device in sim** and treat onboard host-lane placement as
    unverified.
-4. **Run the M2b spike onboard.** Sim numbers are host-scheduler noise (one OS thread per AICore), so the
+5. **Run the M2b spike onboard.** Sim numbers are host-scheduler noise (one OS thread per AICore), so the
    barrier report only proves the mechanism. `-p a2a3 -d 0-1` on 910B2 is what yields real notify/wait
    costs. After that, decide whether to promote the spike to the "proper" path — a 5th swimlane pool kind
    feeding `chip_swimlane_collector.cpp`, so the timestamps land in the merged trace as a comm lane rather
