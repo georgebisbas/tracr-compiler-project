@@ -166,7 +166,7 @@ The AICore path cannot use TraCR's macros — that is the whole finding of [07](
 It uses `aicore/tracr_aicore_emit.h` instead, which already provides the primitives C1–C5 need:
 `tracr_aicore_mark_set` / `_mark_reset` / `_flow_start` / `_flow_end` / `_flow_id`.
 
-**Two gaps to close before C1**, both in simpler on `tracr_l3`:
+**Two gaps to close before C1**, both in simpler on `tracr_l3` — ✅ **DONE 2026-08-28, commit `631e0dd9`**:
 
 1. **The header has no off-switch.** M1's "emit unconditionally, no-op without `-DENABLE_TRACR`" contract
    requires the emit functions to compile to nothing when TraCR is off, or every generated kernel pays for
@@ -176,6 +176,10 @@ It uses `aicore/tracr_aicore_emit.h` instead, which already provides the primiti
    guard in (1) would be permanently off on the core.
 
 Compile-time is the right mechanism — a runtime check would cost a branch per marker on the core.
+
+**Verified onboard on 2 chips.** With TraCR on: 6 payloads / 2 spans / 2 flow endpoints per rank, 2 lanes
+written. With it off: no payloads, no lanes, and the kernel compiles and runs with its marker calls
+*unguarded* — which is the property codegen depends on. Both matched golden.
 
 **Branch ordering.** (1) and (2) are simpler / `tracr_l3`; C1–C5 are pypto / `tracr-codegen-pass`. pypto's
 `runtime/` submodule pins simpler, so the simpler changes land first and the pypto branch takes a
