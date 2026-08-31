@@ -75,6 +75,33 @@ call:
 3. If that axis is indexed by a **constant** → **aggregate**; span only.
 4. Anything else → bail to span.
 
+### Two more discriminators, from reading `alltoallv_gmm.py`
+
+That file was the one most likely to break the model, and it does — in two ways the offsets analysis alone
+does not catch:
+
+```python
+# 1. NO rank axis exists.  signal[[LOCAL_EXPERTS, max_m_tiles]] is expert-major,
+#    and `expected` is a count of contributions, not a single message.
+notify(target=recv_tile_done, peer=destination, offsets=[expert, (destination_slot + row_delta) // M_TILE])
+wait  (signal=recv_tile_done,                   offsets=[expert, m_block], expected=expected_chunks)
+
+# 2. SELF-notify: peer is the local rank. This is intra-chip task ordering, not D2D.
+notify(target=tile_done, peer=my_rank, offsets=[task, 0])
+wait  (signal=tile_done,               offsets=[task, 0], expected=1)
+```
+
+Corpus-wide: **21 self-notifies** (`peer=my_rank` ×16, `peer=self_rank` ×5) and **73 waits with
+`expected != 1`**.
+
+- **`peer` is the local rank → emit no tail at all.** Unambiguous, and it must be checked *before* the
+  offsets analysis: these sites often have perfectly well-formed offsets and would otherwise produce a
+  tail with no possible head. The same shape appears in PyPTO's builtin allgather template, whose
+  self-clearing epilogue does `TNOTIFY(self_sig, -1)` on local addresses.
+- **`expected != 1` is a hint, not a verdict.** It means several contributions land in one cell — usually
+  aggregate, but a wait for the k-th message from *one* named peer is still arrow-able with `seq = k`.
+  Flag for inspection; do not auto-classify.
+
 **Classify per signal, not per call.** A notify whose peer is explicit is always arrow-*tail*-able, but
 emitting a tail whose matching wait is aggregate produces an unmatched endpoint — worse than no arrow.
 The decision must be made once for the signal and applied to both ends.
