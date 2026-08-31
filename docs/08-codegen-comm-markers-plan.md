@@ -28,9 +28,21 @@ So generated kernels need generated markers. Hand-written kernels (32 files acro
 `tests/st/worker/collectives/`) are a **separate, second** effort against simpler's wrappers — out of
 scope here.
 
-## 2. What makes this tractable
+## 2. What the corpus actually looks like
 
-The op signatures are asymmetric, and the asymmetry is the whole design:
+**Surveyed 2026-08-28: 316 `pld.system.notify` / `pld.system.wait` call sites** across pypto (138),
+pypto-serving (90), pypto-lib (64) and pypto-ccfusion (24). Classifier:
+`docs/tools/classify_comm_sites.py`.
+
+| | share | outcome |
+| --- | --- | --- |
+| One rank-valued offset axis | **190 (60%)** | **Full arrows** |
+| All-constant offsets (aggregate cell) | **102 (32%)** | Span only — permanently, see §9 |
+| Task-indexed / expert-major / computed / no offsets | 24 (8%) | Bail to span |
+
+60% is the target. The other 40% degrade to spans, which is still strictly more than exists today.
+
+### The op asymmetry
 
 ```
 pld.system.notify   target, peer, offsets, value      <- peer is an EXPLICIT operand
@@ -38,11 +50,37 @@ pld.system.wait     signal, offsets, expected         <- no peer; encoded in off
 ```
 
 At the notify lowering site (`src/backend/common/pto_ops_distributed.cpp:454`), `op->args_[1]` **is** the
-peer — it is already passed to `EmitCommRemoteView(binding, op->args_[1], codegen)`. The arrow tail needs
-no analysis at all.
+peer — already passed to `EmitCommRemoteView(binding, op->args_[1], codegen)`. Tails are free.
 
-The wait side needs one inference: recover the peer from `offsets`. In the slot-per-peer layout every
-collective here uses, the slot index *is* the rank.
+### Heads: classify the *signal*, not the call site
+
+A positional rule (`offsets[0]` is the rank) was the obvious guess and it is **wrong**. Two real
+counterexamples:
+
+```python
+# rank axis is SECOND  (pypto tests/st/distributed/collectives/test_l3_allreduce_ring.py)
+signal: pld.DistributedTensor[[total_rounds, n_ranks]]     offsets=[rs_round, my_rank]
+
+# rank axis EXISTS but is indexed by a constant  (pypto-lib .../prefill_kv_allgather.py)
+gather_signal: pld.DistributedTensor[[TP_SIZE, 1]]         offsets=[0, 0]
+```
+
+The rule that survives both is **shape-driven**, and it classifies a *signal tensor*, not an individual
+call:
+
+1. Find the signal axis whose extent is `world_size` / `n_ranks` / `TP_SIZE`.
+2. If every notify/wait on that signal indexes that axis with a **rank-valued variable**
+   (`my_rank` on notify, the loop variable on wait) → **arrow-able**; the remaining offset components
+   are `seq`.
+3. If that axis is indexed by a **constant** → **aggregate**; span only.
+4. Anything else → bail to span.
+
+**Classify per signal, not per call.** A notify whose peer is explicit is always arrow-*tail*-able, but
+emitting a tail whose matching wait is aggregate produces an unmatched endpoint — worse than no arrow.
+The decision must be made once for the signal and applied to both ends.
+
+Step 2 also yields `seq` for free in both observed layouts: `[world_size, M_TILES]` gives the chunk index,
+`[total_rounds, n_ranks]` gives the round.
 
 ## 3. Phases
 
@@ -51,7 +89,7 @@ collective here uses, the slot index *is* the rank.
 | **C1** | **Spans, no arrows** | Wrap each lowered `notify` / `wait` in a marker pair. No peer analysis, no buffer sharing questions. | A compiled model shows comm spans on the AICore lane; zero user markers |
 | **C2** | **Buffer injection** | `InjectTracrBuffer` pass, modelled on `InjectGMPipeBuffer` | Buffer reaches every instrumented kernel with no example-level plumbing |
 | **C3** | **Arrow tails** | `FLOW_START` at notify, using `op->args_[1]` | Tails present with correct `(src,dst)`; heads still absent |
-| **C4** | **Arrow heads** | Peer-from-`offsets` inference + conservative bail | Arrows pair in a compiled model; unprovable cases degrade to span-only |
+| **C4** | **Signal classification + arrow heads** | Per-signal rank-axis analysis (§2), three-way: arrow-able / aggregate / bail. Applied to both ends of a signal. | Arrows pair in a compiled model; aggregate and irregular signals emit spans with no unmatched endpoints |
 | **C5** | **`seq`** | Derive from `value` / `expected` | Multi-round and ring collectives pair correctly |
 
 **C1 before C3 deliberately.** Spans need no analysis and prove the whole emit-compile-render path on
@@ -101,9 +139,20 @@ The AICore path cannot use TraCR's macros — that is the whole finding of [07](
 It uses `aicore/tracr_aicore_emit.h` instead, which already provides the primitives C1–C5 need:
 `tracr_aicore_mark_set` / `_mark_reset` / `_flow_start` / `_flow_end` / `_flow_id`.
 
-**One gap to close first:** that header has no off-switch. M1's "emit unconditionally, no-op without
-`-DENABLE_TRACR`" contract requires the emit functions to compile to nothing when TraCR is off. Add the
-guard before C1, or generated kernels pay for markers in production builds.
+**Two gaps to close before C1**, both in simpler on `tracr_l3`:
+
+1. **The header has no off-switch.** M1's "emit unconditionally, no-op without `-DENABLE_TRACR`" contract
+   requires the emit functions to compile to nothing when TraCR is off, or every generated kernel pays for
+   markers in production builds.
+2. **`-DENABLE_TRACR` never reaches the AICore compile.** `kernel_compiler.py` adds it only in
+   `_compile_orchestration_shared_lib` (line 635); `compile_incore` (line 461) passes no such flag. So the
+   guard in (1) would be permanently off on the core.
+
+Compile-time is the right mechanism — a runtime check would cost a branch per marker on the core.
+
+**Branch ordering.** (1) and (2) are simpler / `tracr_l3`; C1–C5 are pypto / `tracr-codegen-pass`. pypto's
+`runtime/` submodule pins simpler, so the simpler changes land first and the pypto branch takes a
+**submodule bump** before C1 can compile.
 
 ## 6. Design decisions already settled by D1–D3
 
@@ -122,9 +171,11 @@ Do not re-litigate these; each was verified on silicon
 
 ## 7. Risks
 
-1. **Peer-from-`offsets` (C4) is the one unproven step.** Tractable for affine offsets over a loop
-   variable; a real model may not oblige. **Mitigation:** C1–C3 deliver spans and tails without it, and
-   the conservative bail degrades to exactly today's behaviour.
+1. **~40% of call sites will not produce arrows** — measured, not estimated (§2). 32% use an aggregate
+   cell and can never produce them; 8% are irregular. **Accepted:** spans everywhere is still strictly
+   more than exists today, and C1–C3 deliver spans and tails independently of C4. The residual risk is
+   that the 8% irregular bucket hides a *pattern* rather than one-offs — `alltoallv_gmm.py` is the file
+   most likely to, and has not been read line by line.
 2. **Marker density in a 40-layer model.** The allreduce writes 30 payloads per rank; a full decode with
    55 notifies × layers could exhaust a fixed buffer. The drop counter makes this visible rather than
    silent, but sizing needs a real model run.
@@ -145,6 +196,12 @@ Do not re-litigate these; each was verified on silicon
   allgather, reduce_scatter. Those are hand-written so they do not exercise codegen — but they are the
   right corpus for validating the **`seq` scheme** against topologies the one-notify-per-peer barrier
   does not cover.
+- **Classification regression:** `docs/tools/classify_comm_sites.py` reports the arrow-able / aggregate /
+  irregular split across all four repos. Run it when a model adds a collective: a new signal layout that
+  lands in the irregular bucket is a silent loss of arrows otherwise. The 2026-08-28 baseline is
+  190 / 102 / 24 of 316.
+- **Reference workload:** `pypto-ccfusion/pypto-l3/allgather_mm.py` — both its collectives (barrier and
+  chunked data publish) are arrow-able with `seq` available, so it is the natural end-to-end target.
 
 ## 9. Out of scope, permanently
 
