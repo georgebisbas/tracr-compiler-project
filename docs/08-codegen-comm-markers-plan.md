@@ -137,6 +137,31 @@ whose host-side zeros are never staged to the device (the D1 finding, [07](07-ai
 **C1 still before C3.** Spans prove the whole emit-compile-render path on generated code. If C1 does not
 render, nothing after it matters.
 
+### What the 2026-09-10 updates changed
+
+The mechanism (§5.1), the phase order, and the §2 coverage split are all unaffected. Four things moved:
+
+1. **C1 gains a first step: append the comm marker types.** No `Comm` / `Notify` / `Wait` marker exists —
+   the list ends at `Resolving` (18). Generated spans need their own names, and because a marker's
+   position *is* its wire id, they must be **appended** (19+), never inserted. Two id shifts happened in
+   one day (restoring `Barrier`, then removing `CopyH2D` / `CopyD2H`), so this is not hypothetical.
+2. **D4 is now mostly done for us.** The runtime gained `src/common/platform/include/host/clock_correlation.h`
+   plus a per-task `CallConfig::capture_clock_anchors` gate, with
+   `begin_clock_correlation_session_if_needed()` wired into both device runners. D4 becomes *consume the
+   calibrated interval*, not *build one*. It carries a constraint worth knowing: device timestamps outside
+   `[HostOrchestrationBegin, DeviceExecutionComplete]` cannot be mapped to the Host clock. AICore comm
+   markers sit inside kernel execution, so they are inside the interval.
+3. **The host copy lanes are gone**, so the timeline distortion they caused is gone with them. Nothing in
+   C1–C5 depended on them; they were spans, never endpoints. The host *scheduling* lane stays, because it
+   holds every host→device arrow tail.
+4. **A mixed-build state decodes garbage, and codegen makes it likelier.** With the host built for TraCR
+   but the kernel compiled without it, the device never writes the count word and the host decodes stale
+   GM — observed as `66 payloads / 0 spans` and a nonsense drop count. `ENABLE_TRACR` reaches the kernel
+   through a **run-time** env read (`kernel_compiler.py`, `os.getenv("BUILD_TRACR")`), not a build-time
+   fact, so the two halves can disagree per run. Once a pass injects the buffer into *every* generated
+   kernel, this stops being an example-level footgun and becomes a property of the whole path. The host
+   decoder should treat an unwritten header as "no data", not as a count.
+
 ### C0 is done, and its blocker cleared itself
 
 **Resolved 2026-09-10.** C0 landed as the `main -> tracr-codegen-pass` merge `9de7d2ae`. The only
