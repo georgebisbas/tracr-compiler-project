@@ -137,6 +137,28 @@ whose host-side zeros are never staged to the device (the D1 finding, [07](07-ai
 **C1 still before C3.** Spans prove the whole emit-compile-render path on generated code. If C1 does not
 render, nothing after it matters.
 
+### C0 carries an external dependency: pypto has not migrated `TaskTensor`
+
+simpler #2044 renamed `TaskTensor` to `Tensor`. simpler `tracr_l3` has only `Tensor`, with no compat
+alias. pypto still **emits** `TaskTensor` into generated orchestration: 31 string literals across
+`tensor_op_codegen.cpp`, `orchestration_codegen.cpp`, `orchestration_analysis.cpp`,
+`classify_iter_arg_carry_pass.cpp` and `transform.cpp`, plus ~170 more occurrences in golden-code test
+expectations. pypto `main` still pins simpler at `39ce891d`, which predates the rename.
+
+There is **no pin that satisfies both**: by the time the AICore emitter landed on `tracr_l3`
+(`53f38f63`, 2026-08-27) the rename was already in, so no commit carries the emitter *and* `TaskTensor`.
+
+What this does and does not block:
+
+- **Does not block development.** The migration is confined to the *orchestration* path. Generated
+  kernels (`kernels/aiv/*.cpp`) never mention `TaskTensor`, so C1/C2's emission, the ptoas pass-through
+  and the ccec kernel compile can all be built and tested against `tracr_l3`.
+- **Does block the end-to-end exit criteria.** "A compiled model shows comm spans" needs the generated
+  orchestration to compile, which needs the migration.
+
+Doing the migration on `tracr-codegen-pass` is possible but unwise: it is upstream pypto's change, and
+~170 golden expectations would conflict with whatever upstream lands. Track it; do not pre-empt it.
+
 ## 4. C2 in detail — the buffer, and why it is the cheap part here
 
 Hand-written kernels pay ~120 lines of plumbing per kernel (extra `ChipTensor`, `add_output`,
