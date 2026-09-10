@@ -137,27 +137,29 @@ whose host-side zeros are never staged to the device (the D1 finding, [07](07-ai
 **C1 still before C3.** Spans prove the whole emit-compile-render path on generated code. If C1 does not
 render, nothing after it matters.
 
-### C0 carries an external dependency: pypto has not migrated `TaskTensor`
+### C0 is done, and its blocker cleared itself
 
-simpler #2044 renamed `TaskTensor` to `Tensor`. simpler `tracr_l3` has only `Tensor`, with no compat
-alias. pypto still **emits** `TaskTensor` into generated orchestration: 31 string literals across
-`tensor_op_codegen.cpp`, `orchestration_codegen.cpp`, `orchestration_analysis.cpp`,
-`classify_iter_arg_carry_pass.cpp` and `transform.cpp`, plus ~170 more occurrences in golden-code test
-expectations. pypto `main` still pins simpler at `39ce891d`, which predates the rename.
+**Resolved 2026-09-10.** C0 landed as the `main -> tracr-codegen-pass` merge `9de7d2ae`. The only
+conflict was the `runtime` submodule pointer, resolved to simpler `tracr_l3` (`6a48fa38`); main's side
+carries no TracR work, and `tracr_l3` is the only branch with the AICore emitter.
 
-There is **no pin that satisfies both**: by the time the AICore emitter landed on `tracr_l3`
-(`53f38f63`, 2026-08-27) the rename was already in, so no commit carries the emitter *and* `TaskTensor`.
+**The `TaskTensor` gate is gone.** pypto migrated its emitted code to `Tensor`, so generated
+orchestration now matches what `tracr_l3` provides. Zero `TaskTensor` string literals remain. This was
+the external dependency blocking the C-phase end-to-end exit criteria, and it needed no work from us.
 
-What this does and does not block:
+Checked after resolving, because a clean textual merge is not a working one:
 
-- **Does not block development.** The migration is confined to the *orchestration* path. Generated
-  kernels (`kernels/aiv/*.cpp`) never mention `TaskTensor`, so C1/C2's emission, the ptoas pass-through
-  and the ccec kernel compile can all be built and tested against `tracr_l3`.
-- **Does block the end-to-end exit criteria.** "A compiled model shows comm spans" needs the generated
-  orchestration to compile, which needs the migration.
+- `comm_layout.h`'s `static_assert`s on `::CommContext` offsets still parse against `tracr_l3`. This is
+  the **only** hard compile coupling between pypto's C++ and the runtime submodule.
+- Generated orchestration's includes resolve. `orchestration_api.h` and `tensor.h` both exist, and the
+  codegen emits neither the old `pto_orchestration_api.h` nor `TaskTensor`.
+- M1's marker emission survived at both `PTO2_SCOPE_` sites.
 
-Doing the migration on `tracr-codegen-pass` is possible but unwise: it is upstream pypto's change, and
-~170 golden expectations would conflict with whatever upstream lands. Track it; do not pre-empt it.
+**Debt carried, not blocking.** `tracr_l3` is 63 commits behind simpler main and does not contain
+`39ce891d`, the commit pypto main pins. A `main -> tracr_l3` merge is still owed on the simpler side; a
+dry run shows **16 conflicts**, concentrated in the usual TraCR re-weave surface (the a2a3/a5 aicpu
+executors, the schedulers, and all four `device_runner.cpp`). Nothing in the C phases depends on closing
+it, but it should not be left to grow, and the traps are already catalogued in the tracr merge workflow.
 
 ## 4. C2 in detail — the buffer, and why it is the cheap part here
 
