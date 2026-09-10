@@ -111,16 +111,31 @@ Step 2 also yields `seq` for free in both observed layouts: `[world_size, M_TILE
 
 ## 3. Phases
 
+Listed in **execution order**. Labels are kept stable from the original plan, so C2 precedes C1.
+
 | # | Phase | Deliverable | Exit criterion |
 | --- | --- | --- | --- |
-| **C1** | **Spans, no arrows** | Wrap each lowered `notify` / `wait` in a marker pair. No peer analysis, no buffer sharing questions. | A compiled model shows comm spans on the AICore lane; zero user markers |
-| **C2** | **Buffer injection** | `InjectTracrBuffer` pass, modelled on `InjectGMPipeBuffer` | Buffer reaches every instrumented kernel with no example-level plumbing |
+| **C0** | **Submodule bump** | Point pypto `tracr-codegen-pass` at simpler `tracr_l3` | The branch compiles against the AICore emitter and the restored marker ids |
+| **C2** | **Buffer injection** | `InjectTracrBuffer` pass, modelled on `InjectGMPipeBuffer`. Includes **run-scoped reset** (below). | Buffer reaches every instrumented kernel with no example-level plumbing, and survives multiple launches |
+| **C1** | **Spans, no arrows** | Wrap each lowered `notify` / `wait` in a marker pair, via an `extern "C"` call declared in the `.pto` (§5.1). No peer analysis. | A compiled model shows comm spans on the AICore lane; zero user markers |
 | **C3** | **Arrow tails** | `FLOW_START` at notify, using `op->args_[1]` | Tails present with correct `(src,dst)`; heads still absent |
 | **C4** | **Signal classification + arrow heads** | Per-signal rank-axis analysis (§2), three-way: arrow-able / aggregate / bail. Applied to both ends of a signal. | Arrows pair in a compiled model; aggregate and irregular signals emit spans with no unmatched endpoints |
 | **C5** | **`seq`** | Derive from `value` / `expected` | Multi-round and ring collectives pair correctly |
 
-**C1 before C3 deliberately.** Spans need no analysis and prove the whole emit-compile-render path on
-generated code. If C1 does not render, nothing after it matters.
+**C2 before C1, revised 2026-09-10.** The original order put spans first on the reasoning that they need
+no analysis. They also need a buffer, and there is none to borrow: `CommContext` is fully packed (1056 B,
+`comm_layout.h` pins every offset) and byte-mirrored in pto-isa as `HcclDeviceContext`, and its
+`workSpace` field is a live SDMA/URMA allocation. So C1's exit criterion depends on C2's parameter.
+
+**Run-scoped reset is part of C2, not a detail.** `tracr_aicore_reset` currently runs at kernel entry and
+zeroes the count header. That is correct for a hand-written kernel launched once, and wrong for a compiled
+model: every launch would wipe the previous launch's records and only the last would survive. Reset must
+become once per run. It is not a one-line move, because the trace buffer is an `OUTPUT_EXISTING` tensor
+whose host-side zeros are never staged to the device (the D1 finding, [07](07-aicore-tracing-direction.md)
+§4).
+
+**C1 still before C3.** Spans prove the whole emit-compile-render path on generated code. If C1 does not
+render, nothing after it matters.
 
 ## 4. C2 in detail — the buffer, and why it is the cheap part here
 
