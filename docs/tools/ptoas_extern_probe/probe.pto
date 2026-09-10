@@ -1,0 +1,11 @@
+module attributes {pto.target_arch = "a2a3"} {
+  func.func private @tracr_mark(!pto.ptr<i64>, i32, i32, i32) -> ()
+
+  func.func @probe(%arg0: !pto.ptr<i64>) attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c7_i32 = arith.constant 7 : i32
+    func.call @tracr_mark(%arg0, %c0_i32, %c7_i32, %c1_i32) : (!pto.ptr<i64>, i32, i32, i32) -> ()
+    return
+  }
+}

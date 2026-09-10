@@ -166,6 +166,88 @@ The AICore path cannot use TraCR's macros — that is the whole finding of [07](
 It uses `aicore/tracr_aicore_emit.h` instead, which already provides the primitives C1–C5 need:
 `tracr_aicore_mark_set` / `_mark_reset` / `_flow_start` / `_flow_end` / `_flow_id`.
 
+### 5.1 How a C++ marker call reaches an op lowered to PTO IR
+
+**Established 2026-09-10, after a wrong turn worth recording.**
+
+Comm ops do not lower to C++ in PyPTO. `MakeNotifyCodegenPTO` / `MakeWaitCodegenPTO`
+(`src/backend/common/pto_ops_distributed.cpp:454`, `:518`) emit **PTO/MLIR text**:
+
+```cpp
+codegen.Emit("pto.comm.tnotify(" + partition_view + ", " + value_ssa + " ...");
+```
+
+That file is the *only* emitter for `pld.system.notify` / `pld.system.wait`. The full pipeline is:
+
+```
+PyPTO ──emits──> ptoas/*.pto ──ptoas 0.60──> ptoas/*.cpp ──PyPTO prepends prologue──> kernels/aiv/*.cpp
+```
+
+`kernels/aiv/*.cpp` is ptoas's output **verbatim**, under a prologue PyPTO writes (includes, `__gm__` /
+`__aicore__` defines, the `__CPU_SIM` cache-op shims). Verified by diffing the two against a real
+distributed build (`/tmp/build_output/L3AllGatherGemm_*`), where the comm ops appear as real C++:
+
+```cpp
+pto::comm::TNOTIFY(v19, v5, v4);
+pto::comm::TWAIT(v23, v5, v3);
+```
+
+**The wrong turn.** This looked like a blocker: a marker needs a timestamp, the timestamp comes from
+`get_sys_cnt_aicore()`, that is a C++ SPR read, and the PTO dialect has **no counter-read op** (confirmed —
+`pto.total_cycles` is a cost-model field in `pto/costmodel/perf_sim/pipe_model.hpp`, not an ISA op, and
+`ptoas` is a closed binary shipped as a wheel at `/opt/ptoas-bin`, so the dialect cannot be extended from
+here). Each of those facts is true and the conclusion does not follow.
+
+**The IR never needs to read the counter. It only needs to *call* the marker.** The counter read happens
+inside the callee, in ordinary C++ compiled by ccec — exactly as in the D1–D3 hand-written kernels.
+
+And a call is expressible, because **ptoas passes an externally-declared function straight through**. A
+declaration-only `func.func private` plus a `func.call`:
+
+```mlir
+func.func private @tracr_mark(!pto.ptr<i64>, i32, i32, i32) -> ()
+...
+func.call @tracr_mark(%arg0, %c0_i32, %c7_i32, %c1_i32) : (!pto.ptr<i64>, i32, i32, i32) -> ()
+```
+
+compiles under `ptoas probe.pto -o probe.cpp --enable-insert-sync --pto-level=level3` to:
+
+```cpp
+extern "C" AICORE void tracr_mark(__gm__ int64_t*, int32_t, int32_t, int32_t);
+...
+  #if defined(__DAV_VEC__)
+  tracr_mark(v1, v2, v4, v3);
+  #endif // __DAV_VEC__
+```
+
+ptoas **synthesizes the `extern "C" AICORE` declaration itself**, and places the call inside the
+correct core-kind guard. Since PyPTO owns the prologue, the matching definition is injected there and
+lands in the same translation unit, so it still inlines. Reusable probe (declaration, call, definition,
+decode) with its two build traps: [`docs/tools/ptoas_extern_probe/`](tools/ptoas_extern_probe/). The
+emitted record decoded to `0x100070000` = channel 0, event 7, extra 1.
+
+**Consequences for the plan:**
+
+- No dialect change, no PTOAS/ISA-team dependency. C1–C5 stay inside PyPTO.
+- The marker signature must be **`extern "C"`** and match the ptoas-emitted declaration exactly — no
+  overloads, no default arguments. `tracr_aicore_emit.h`'s current C++-linkage inline functions need a
+  thin `extern "C"` shim per marker kind.
+- The buffer arrives as a `!pto.ptr<i64>` kernel parameter, which is what **C2** delivers. C1's exit
+  criterion ("a compiled model shows comm spans") therefore depends on C2's parameter injection; the
+  phases are more entangled than §3 implies.
+
+**Verified under ccec too.** The production incore flags
+(`--cce-aicore-only --cce-aicore-arch=dav-c220-vec -mllvm -cce-aicore-addr-transform -DMEMORY_BASE`,
+`toolchain.py:160`) compile an `extern "C" [aicore]` function taking `__gm__ int64_t*`, with a
+redundant re-declaration matching ptoas's, and emit the symbol:
+
+```
+0000000000000000 T tracr_mark
+```
+
+`get_sys_cnt()` resolves as a ccec builtin inside it with no include — so the timestamp read needs
+nothing from simpler's headers on this path.
+
 **Two gaps to close before C1**, both in simpler on `tracr_l3` — ✅ **DONE 2026-08-28, commit `631e0dd9`**:
 
 1. **The header has no off-switch.** M1's "emit unconditionally, no-op without `-DENABLE_TRACR`" contract
