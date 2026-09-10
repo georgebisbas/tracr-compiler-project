@@ -155,11 +155,25 @@ Checked after resolving, because a clean textual merge is not a working one:
   codegen emits neither the old `pto_orchestration_api.h` nor `TaskTensor`.
 - M1's marker emission survived at both `PTO2_SCOPE_` sites.
 
-**Debt carried, not blocking.** `tracr_l3` is 63 commits behind simpler main and does not contain
-`39ce891d`, the commit pypto main pins. A `main -> tracr_l3` merge is still owed on the simpler side; a
-dry run shows **16 conflicts**, concentrated in the usual TraCR re-weave surface (the a2a3/a5 aicpu
-executors, the schedulers, and all four `device_runner.cpp`). Nothing in the C phases depends on closing
-it, but it should not be left to grow, and the traps are already catalogued in the tracr merge workflow.
+**The simpler-side debt is closed too.** `tracr_l3` was 63 commits behind simpler main and lacked
+`39ce891d`, the commit pypto main pins. Merging **`tracr`** into it (rather than `main`) closed the gap
+at a third of the cost: `tracr` already carried main, so it conflicted in **7** files instead of 16, and
+it contains `39ce891d`. `tracr_l3` is now 5 commits behind main and the pin is an ancestor.
+
+Two of those seven were not side-picks, and both are worth knowing about:
+
+- **`CallConfig` gained an eighth `int32`.** Each branch had independently added a *seventh* --
+  `flow_id` (TraCR arrows) on `tracr_l3`, `capture_clock_anchors` on `tracr`. The mailbox config is a raw
+  `memcpy` of the struct, so keeping both invalidated the `static_assert` pinning the wire layout (which
+  caught it), `worker.py`'s `_CFG_FMT` (still 7 `int32` slots, so every later field would be misread),
+  and the unpack tuple. Confirmed against the compiler: `flow_id` at 24, `capture_clock_anchors` at 28,
+  `runtime_env` at 32, `sizeof` 1152, Python agreeing at each.
+- **`orchestrator.py`'s provenance check changed shape.** main made `member_checks` a 2-tuple and
+  dropped the `device_args` argument, so the TraCR markers and flow-id stamping were re-woven around
+  main's structure rather than kept as they were.
+
+Marker ids survived: `Barrier` 17, `CopyH2D` 18, `CopyD2H` 19 -- `tracr` has none of the three. Verified
+across all four platforms with `BUILD_TRACR=ON`, plus a Python import and field round-trip.
 
 ## 4. C2 in detail — the buffer, and why it is the cheap part here
 
