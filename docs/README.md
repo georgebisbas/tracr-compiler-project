@@ -3,8 +3,10 @@
 Groundwork for the big plan: **PyPTO auto-generates TracR instrumentation markers via a compiler
 pass**, so any compiled program can be profiled on Ascend hardware without hand-editing generated code.
 
-These docs establish the shared context before that work starts. Read them in order — they form a single
-narrative from *how we profile today* to *how the pass should be built*.
+**That goal is met (2026-09-29): the pass emits every communication marker, and device-to-device arrows
+render on real silicon.** Docs 00–05 are the shared context, read in order as a narrative from *how we
+profile today* to *how the pass should be built*. 06–08 are the plans, now annotated with what shipped;
+[STATUS.md](STATUS.md) is the live state and the only file to read for "where are we".
 
 | # | Doc | What it covers |
 | --- | --- | --- |
@@ -15,8 +17,9 @@ narrative from *how we profile today* to *how the pass should be built*.
 | 04 | [04-codegen-instrumentation-blueprint.md](04-codegen-instrumentation-blueprint.md) | **The practical blueprint.** The concrete emission pattern (a `ProfilingLevel` policy + a pluggable TracR/Tracy/NVTX backend), mapped onto PyPTO's codegen, with generated-output examples and best practices — a minimal end-to-end design for the pass. |
 | 05 | [05-benchmarking-compute-comm-copy.md](05-benchmarking-compute-comm-copy.md) | **Benchmarking scope (HPC).** Instrument **all three cost classes** — compute, data copy-in/out, communication — in one correlated timeline, with a **region selector** to choose which IR parts (loops, scopes, dispatches, copies, collectives) to trace, and single- vs multi-node methodology (flows for comm edges, per-rank correlation, overlap, straggler analysis). |
 | 06 | [06-execution-plan.md](06-execution-plan.md) | **The build plan.** Repo/branch map, verified ground truth, the M0–M3 milestones, and the TracR-side deltas. |
-| 07 | [07-aicore-tracing-direction.md](07-aicore-tracing-direction.md) | **Reaching the AICore.** Why collectives are invisible from above the core, the reframe (feed TracR's payload format rather than port TracR to CCEC), the three verified preconditions, and the D1–D4 phases — plus the decided buffer policy and flow-id packing. |
-| 08 | [08-codegen-comm-markers-plan.md](08-codegen-comm-markers-plan.md) | **The plan for zero-user-markers comm tracing.** Why the runtime is the wrong layer (PyPTO lowers notify/wait straight to the ISA, bypassing simpler), the C1–C5 phases, the `InjectGMPipeBuffer` precedent for buffer injection, and the peer-from-offsets inference that is the one unproven step. |
+| 07 | [07-aicore-tracing-direction.md](07-aicore-tracing-direction.md) | **Reaching the AICore — D1–D3 DONE.** Why collectives are invisible from above the core, the reframe (feed TracR's payload format rather than port TracR to CCEC), the verified preconditions, and the phases. D4 dropped with the host lane. |
+| 08 | [08-codegen-comm-markers-plan.md](08-codegen-comm-markers-plan.md) | **Zero-user-marker comm tracing — C0–C5 DONE, as built.** Why the runtime is the wrong layer, what each step does, the two C2 designs and why the first was impossible, the peer-from-offsets rule and its measured coverage, and the shape constraints ptoas imposes. |
+| — | [STATUS.md](STATUS.md) | **Current state.** Branch/commit map, onboard results, coverage numbers, what is open, whether it is PR-able, the build recipe, and the environment traps. |
 
 ## The throughline
 
@@ -34,15 +37,22 @@ narrative from *how we profile today* to *how the pass should be built*.
   05  benchmarking scope ............ compute + copy + comm, selectable IR, single/multi-node
    │
    ▼
- [future]  a PyPTO compiler pass that emits TracR markers automatically
+  06  execution plan ................ milestones M0-M3
+   │
+  07  reaching the AICore ........... D1-D3: TracR payloads written from the core itself
+   │
+  08  codegen comm markers .......... C0-C5: the pass emits them; D2D arrows on silicon
+   │
+   ▼
+ [done]  a PyPTO compiler pass that emits TracR markers automatically
 ```
 
-The key insight across all six: most of the machinery already exists (TracR itself; the runtime
-plumbing in PR #1173; the pass-pipeline and codegen choke point in PyPTO). The remaining work is narrow —
-a **policy-gated pass that emits `INSTRUMENTATION_MARK_SET/RESET` (and `FLOW_*`) calls into the generated
-orchestration C++** at the structural regions PyPTO already knows (scopes, task dispatches, copies,
-collectives) — covering compute, data copy-in/out, and communication, selectable per region, single- and
-multi-node.
+The key insight held up: most of the machinery already existed (TracR itself; the runtime plumbing in
+PR #1173; the codegen choke point in PyPTO). Two findings were needed beyond it. **TracR never had to be
+ported to CCEC** — a `.bts` file is a flat array of 16-byte payloads, so the AICore only has to write
+records (07). And **ptoas passes a declaration-only `func.func private` through**, so PTO IR can call a
+marker with no dialect change (08) — which is what let the comm markers come from the compiler rather
+than from a user's hands.
 
 ## Repos referenced
 

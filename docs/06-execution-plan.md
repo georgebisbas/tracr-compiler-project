@@ -1,5 +1,13 @@
 # 06 — Execution plan: building the PyPTO TracR marker pass
 
+> **Status (2026-09-29): M0–M2 and the C/D series are DONE.** The goal stated below — PyPTO
+> auto-generating TracR markers — is met, with device-to-device arrows validated on silicon.
+> This doc is the durable plan and rationale; for what actually shipped see
+> [08](08-codegen-comm-markers-plan.md), and for current state [STATUS.md](STATUS.md).
+> The one milestone that was *dropped* rather than completed is M2c (onboard host↔device clock
+> sync): the host lane it served was retired.
+
+
 > Part of the **tracr-compiler-project** doc set. Docs [00](00-pypto-profiling.md)–[05](05-benchmarking-compute-comm-copy.md)
 > are *context and theory*; this doc is the **plan of record** — how we tackle it, who owns what, the
 > milestones, and the concrete first target. It is the "[future] PyPTO compiler pass" the doc-set

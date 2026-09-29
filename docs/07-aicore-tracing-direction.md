@@ -1,5 +1,12 @@
 # 07 — New direction: TracR lanes on the AICore
 
+> **Status: D1–D3 DONE (2026-09).** The AICore lane ships and device-to-device arrows render
+> on silicon. What this doc records is the *direction and the ground truth* that made it
+> possible; the as-built comm-marker record is [08](08-codegen-comm-markers-plan.md) and the
+> current state is [STATUS.md](STATUS.md). D4 (onboard host↔device clock) is moot — the host
+> lane was retired.
+
+
 **Opened:** 2026-08-26. Supersedes nothing; extends [06](06-execution-plan.md) §6 and doc
 [05](05-benchmarking-compute-comm-copy.md) §8 (comm marker source).
 
